@@ -15,6 +15,7 @@ module System.Hardware.XBee.Command (
     CommandName,
     commandName,
     CommandStatus(..),
+    AssociationIndication(..),
     ModemStatus(..),
     DisableAck,
     BroadcastPan,
@@ -34,7 +35,9 @@ import Numeric
 import Data.Word
 import Data.Bits
 import Data.Circular
+import Data.Maybe (fromJust, fromMaybe)
 import Data.Serialize
+import Data.Tuple (swap)
 import Data.ByteString (ByteString)
 import Control.Monad
 import Control.Applicative
@@ -80,6 +83,49 @@ instance Serialize Address16 where
 data XBeeAddress = XBeeAddress64 Address64
                  | XBeeAddress16 Address16
                  deriving (Show, Eq)
+
+
+data AssociationIndication 
+    = JoinSucceeded
+    | NoPANsFound
+    | NoValidPANsFound
+    | JoinFailedNotAllowed
+    | NoJoinableBeaconsFound
+    | UnexpectedState
+    | JoinFailed
+    | CoordinatorStartFailed
+    | CheckingForExistingCoordinator
+    | LeaveFailed
+    | JoinFailedDeviceDidNotRespond
+    | SecureJoinFailedUnsecuredKey
+    | SecureJoinFailedKeyNotReceived
+    | SecureJoinFailedIncorrectPreconfiguredLinkKey
+    | ScanningForNetwork
+    | Unknown
+    deriving (Show, Eq)
+
+associationTable :: [(Word8, AssociationIndication)]
+associationTable = 
+    [ (0x00, JoinSucceeded) 
+    , (0x21, NoPANsFound)
+    , (0x22, NoValidPANsFound)
+    , (0x23, JoinFailedNotAllowed)
+    , (0x24, NoJoinableBeaconsFound)
+    , (0x25, UnexpectedState)
+    , (0x27, JoinFailed)
+    , (0x2A, CoordinatorStartFailed)
+    , (0x2B, CheckingForExistingCoordinator)
+    , (0x2C, LeaveFailed)
+    , (0xAB, JoinFailedDeviceDidNotRespond)
+    , (0xAC, SecureJoinFailedUnsecuredKey)
+    , (0xAD, SecureJoinFailedKeyNotReceived)
+    , (0xAF, SecureJoinFailedIncorrectPreconfiguredLinkKey)
+    , (0xFF, ScanningForNetwork)
+    ]
+
+instance Serialize AssociationIndication where
+    get = liftM (fromMaybe Unknown . flip lookup associationTable) getWord8
+    put = putWord8 . fromJust . flip lookup (map swap associationTable) 
 
 
 data ModemStatus = HardwareReset

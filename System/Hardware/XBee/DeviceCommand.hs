@@ -17,6 +17,7 @@ module System.Hardware.XBee.DeviceCommand (
     nodeIdentifier,
     panId,
     -- * Discover
+    associationIndication,
     NodeInformation(..),
     discover,
     -- * Various
@@ -100,7 +101,6 @@ address64 = combine <$> getAT (a64p 'L') <*> getAT (a64p 'H')
             h <- hf
             return $ Address64 $ fromIntegral l .|. fromIntegral h `shift` 32
 
-
 newtype RawData = RawData BS.ByteString
 instance Serialize RawData where
     get = liftM RawData (remaining >>= getByteString)
@@ -140,6 +140,9 @@ panId = atSetting 'I' 'D'
 -- | Hardware version of the xbee.
 hardwareVersion :: XBeeCmdAsync Word16
 hardwareVersion = atCommand 'H' 'V' ()
+
+associationIndication :: XBeeCmdAsync AssociationIndication
+associationIndication = atCommand 'A' 'I' ()
 
 -- | Used to force a software reset on the RF module. The reset simutates powering off
 -- and then on again the xbee module.
