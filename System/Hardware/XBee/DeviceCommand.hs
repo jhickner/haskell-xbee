@@ -20,9 +20,15 @@ module System.Hardware.XBee.DeviceCommand (
     associationIndication,
     NodeInformation(..),
     discover,
+    discoverTimeout,
+    discoveryOption,
     -- * Various
+    baudRate,
+    deviceType,
     hardwareVersion,
-    softwareReset
+    softwareVersion,
+    softwareReset,
+    write
 ) where
 
 import Data.Word
@@ -37,6 +43,8 @@ import Control.Monad
 import Control.Applicative
 import System.Hardware.XBee.Device
 import System.Hardware.XBee.Command
+
+import Debug.Trace
 
 
 sendLocal  cmd handler = localTimeout  >>= flip send (FrameCmd cmd handler)
@@ -84,7 +92,6 @@ data ATSetting a = ATSetting { getAT :: XBeeCmdAsync a,
 
 atSetting :: Serialize a => Char -> Char -> ATSetting a
 atSetting c1 c2 = ATSetting (atCommand c1 c2 ()) (atCommand c1 c2)
-
 
 -- | 16-bit network address of the xbee.
 address16 :: ATSetting Address16
@@ -134,31 +141,27 @@ nodeIdentifier = mapAtSetting (atSetting 'N' 'I') unpackUtf8 enc
 
 -- | Used to set and read the PAN (Personal Area Network) ID of the xbee.
 --   Only modules with matching PAN IDs can communicate with each other
-panId :: ATSetting Word16
+panId :: ATSetting Word64
 panId = atSetting 'I' 'D'
-
--- | Hardware version of the xbee.
-hardwareVersion :: XBeeCmdAsync Word16
-hardwareVersion = atCommand 'H' 'V' ()
 
 associationIndication :: XBeeCmdAsync AssociationIndication
 associationIndication = atCommand 'A' 'I' ()
 
--- | Used to force a software reset on the RF module. The reset simutates powering off
--- and then on again the xbee module.
-softwareReset :: XBeeCmdAsync ()
-softwareReset = atCommand 'F' 'R' ()
-
-
-data NodeInformation = NodeInformation {
-    nodeAddress16 :: Address16,
-    nodeAddress64 :: Address64,
-    nodeSignalStrength :: SignalStrength,
-    nodeId :: String } deriving (Show,Eq)
+data NodeInformation = NodeInformation 
+    { nodeNetworkAddress :: Word16
+    , nodeAddress64 :: Address64
+    , nodeId :: String
+    -- , nodeParentNetworkAddress :: Address16
+    -- , nodeType :: NodeType
+    -- , nodeStatus :: Word8
+    -- , nodeProfileId :: Word16
+    -- , nodeManufacturerId :: Word16 
+    -- , nodeDeviceType :: NodeDeviceType
+    } deriving (Show, Eq)
 instance Serialize NodeInformation where
-    get = NodeInformation <$> get <*> get <*> get <*>
-        liftM (takeWhile (/= '\0' ) . unpackUtf8) get
-    put (NodeInformation a16 a64 sst nid) = put a16 >> put a64 >> put sst >> put (Utf8String nid)
+    get = NodeInformation <$> get <*> get
+                          <*> liftM (takeWhile (/= '\0') . unpackUtf8) get -- TODO: figure out how to takeWhile
+    put (NodeInformation nmy n64 nid) = put nmy >> put n64 >> put nid
 
 
 -- | Discovers all nodes on that can be reached from this xbee. Does not include this
@@ -166,7 +169,7 @@ instance Serialize NodeInformation where
 --   All modules on the current operating channel and PAN ID are found.
 discover :: TimeUnit time => time -> XBeeCmdAsync [NodeInformation]
 discover tmo = setAT discoverTimeout (convertUnit tmo) >>= await >>
-               setAT discoverSelfResponse False >>= await >>
+               setAT discoveryOption AppendDD >>= await >>
                localTimeout >>= discover' . tmo'
     where tmo' lcl = convertUnit tmo + lcl
 
@@ -179,16 +182,40 @@ discover' tmout = send tmout $ FrameCmd cmd (input >>= handle [])
                 | otherwise = do ni <- failOnLeft $ decode d
                                  input >>= handle (ni:soFar)
           handle _     (CRData (ATCommandResponse _ _ status _)) = fail $ "Failed: " ++ show status
-          handle _ _ = fail "Timeout"
+          --handle _ _ = fail "Timeout"
+          handle soFar _ = traceShow soFar $ return soFar
 
--- | Set/Get the node discover timeout (only used internally).
+-- | Set/Get the node discover timeout.
 discoverTimeout :: ATSetting Millisecond
 discoverTimeout = mapAtSetting (atSetting 'N' 'T') convertToMs (max 1 . min 252 . convertFromMs)
-    where convertToMs :: Word8 -> Millisecond
+    where convertToMs :: Word16 -> Millisecond
           convertToMs b = fromIntegral (b * 100)
-          convertFromMs :: Millisecond -> Word8
+          convertFromMs :: Millisecond -> Word16
           convertFromMs v = round $ (fromIntegral (toMicroseconds v) / 100000 :: Double)
 
 -- | Controls if a node discover dows return the sender as well (only used internally).
-discoverSelfResponse :: ATSetting Bool
-discoverSelfResponse = atSetting 'N' 'O'
+discoveryOption :: ATSetting DiscoveryOption
+discoveryOption = atSetting 'N' 'O'
+
+
+baudRate :: ATSetting BaudRate
+baudRate = atSetting 'B' 'D'
+
+deviceType :: ATSetting NodeDeviceType
+deviceType = atSetting 'D' 'D'
+
+-- | Hardware version of the xbee.
+hardwareVersion :: XBeeCmdAsync Word16
+hardwareVersion = atCommand 'H' 'V' ()
+
+softwareVersion :: XBeeCmdAsync Word16
+softwareVersion = atCommand 'V' 'R' ()
+
+-- | Used to force a software reset on the RF module. The reset simutates powering off
+-- and then on again the xbee module.
+softwareReset :: XBeeCmdAsync ()
+softwareReset = atCommand 'F' 'R' ()
+
+-- | Write parameters to non-volatile memory on the RF module.
+write :: XBeeCmdAsync ()
+write = atCommand 'W' 'R' ()

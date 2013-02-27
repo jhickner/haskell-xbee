@@ -11,7 +11,8 @@ import Data.SouSiT
 import Data.SouSiT.Sink
 import qualified Data.SouSiT.Trans as T
 import qualified Codec.Binary.UTF8.String as S
-import System.Hardware.Serial
+import System.Hardware.Serial hiding (baudRate, BaudRate(..))
+import qualified System.Hardware.Serial as Ser
 import System.Hardware.XBee.Command
 import System.Hardware.XBee.Device
 import System.Hardware.XBee.DeviceCommand
@@ -22,14 +23,16 @@ import Print
 
 
 connector  f s = handleConnector $ openSerialPort f s
-connector' f s = slowHandleConnector 30000 $ openSerialPort f s
-connector1 = connector  "/dev/tty.usbserial-A6003ThW" $ defaultSettings { baudRate = B9600 }
-connector2 = connector' "/dev/tty.usbserial-A6003TfN" $ defaultSettings { baudRate = B9600 }
+--connector  f s = handleConnector $ openSerialPort f s
+--connector' f s = slowHandleConnector 30000 $ openSerialPort f s
+connector1 = connector "/dev/ttyUSB0" $ defaultSettings { Ser.baudRate = Ser.B115200 }
+connector2 = connector "/dev/ttyUSB1" $ defaultSettings
 
 
 main = withSysoutPrint $ startThreadGroup [
-                runXBee connector1 $ initXBee "One" >> sayHi >> showPeers >> sayHiToAll >> sayBye,
-                runXBee connector2 $ initXBee "Two" >> sayHi >> echoMsgs
+		runXBee connector1 $ showPeers
+                --runXBee connector1 $ initXBee "One" >> sayHi >> showPeers >> sayHiToAll >> sayBye
+                --runXBee connector2 $ initXBee "Two" >> sayHi >> echoMsgs
             ] >>= awaitThreadGroup >> printLn "Done."
           
 
@@ -45,20 +48,26 @@ diagnostics = do
         out "Address64 = " address64
         a16 <- getAT address16 >>= await
         output $ "Address16 = " ++ show a16
-        setAT address16 (Address16 0x1234) >>= await
+        out "Association = " associationIndication
+        --setAT address16 (Address16 0x1234) >>= await
         out "New Address16 = " $ getAT address16
         out "NodeIdentifier = " $ getAT nodeIdentifier
         out "PAN-ID = " $ getAT panId
         out "Hardware Version = " hardwareVersion
-        setAT address16 a16 >>= await
-        showPeers
+        out "Software Version = " softwareVersion
+        --setAT address16 a16 >>= await
+        --showPeers
+
+
+getPeers = discover (3200 :: Millisecond) >>= await
 
 showPeers = do
-        nodes <- discover (300 :: Millisecond) >>= await
+        -- 3200 is the shortest allowable
+        nodes <- discover (3200 :: Millisecond) >>= await
         output $ "Found " ++ show (length nodes) ++ " peers:"
         mapM_ (output . ("   " ++) . formatNode) nodes
-    where formatNode n = "- " ++ show (nodeAddress64 n) ++ " with " ++
-                show (nodeSignalStrength n)
+    where formatNode n = "- " ++ show (nodeAddress64 n) ++ " called " ++
+              show (nodeId n)
 
 sayHiToAll = do
         broadcast $ utfToBs "Hi everybody"

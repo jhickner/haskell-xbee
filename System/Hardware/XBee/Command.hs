@@ -11,15 +11,21 @@ module System.Hardware.XBee.Command (
     Address16(..),
     broadcastAddress,
     disabledAddress,
+    -- * Discover
+    NodeType(..),
+    NodeDeviceType(..),
+    DiscoveryOption(..),
+    AssociationIndication(..),
+    -- * Various
+    BaudRate(..),
+    SignalStrength,
     -- * Command
     CommandName,
     commandName,
     CommandStatus(..),
-    AssociationIndication(..),
     ModemStatus(..),
     DisableAck,
     BroadcastPan,
-    SignalStrength,
     dBm,
     fromDbm,
     TransmitStatus(..),
@@ -59,6 +65,7 @@ instance Circular FrameId where
     initial = frameId
     next = nextFrame
 
+
 -- | Address of an XBee device.
 newtype Address64 = Address64 Word64 deriving (Eq)
 -- | Address for broadcasts to all XBee devices.
@@ -80,10 +87,18 @@ instance Serialize Address16 where
     put (Address16 a) = putWord16be a
 
 -- | A 64- or 16-bit network address of an XBee device.
-data XBeeAddress = XBeeAddress64 Address64
-                 | XBeeAddress16 Address16
-                 deriving (Show, Eq)
+data XBeeAddress 
+    = XBeeAddress64 Address64
+    | XBeeAddress16 Address16
+    deriving (Show, Eq)
 
+
+data DiscoveryOption
+    = NoDiscoveryOption
+    | AppendDD
+    | IncludeSelf
+    | AppendDDAndIncludeSelf
+    deriving (Show, Eq, Enum)
 
 data AssociationIndication 
     = JoinSucceeded
@@ -101,7 +116,7 @@ data AssociationIndication
     | SecureJoinFailedKeyNotReceived
     | SecureJoinFailedIncorrectPreconfiguredLinkKey
     | ScanningForNetwork
-    | Unknown
+    | UnknownIndication
     deriving (Show, Eq)
 
 associationTable :: [(Word8, AssociationIndication)]
@@ -124,17 +139,74 @@ associationTable =
     ]
 
 instance Serialize AssociationIndication where
-    get = liftM (fromMaybe Unknown . flip lookup associationTable) getWord8
+    get = liftM (fromMaybe UnknownIndication . flip lookup associationTable) getWord8
     put = putWord8 . fromJust . flip lookup (map swap associationTable) 
 
+data NodeType
+    = Coordinator
+    | Router
+    | Endpoint
+    deriving (Show, Eq, Enum)
 
-data ModemStatus = HardwareReset
-                 | WatchdogTimerReset
-                 | Associated
-                 | Disassociated
-                 | SyncLost
-                 | CoordinatorRealignment
-                 | CoordinatorStarted deriving (Enum, Show, Eq, Bounded)
+data NodeDeviceType
+    = UnknownDeviceType
+    | ConnectPortX8Gateway
+    | ConnectPortX4Gateway
+    | ConnectPortX2Gateway
+    | RS232Adapter
+    | RS485Adapter
+    | XBeeSensorAdapter
+    | WallRouter
+    | DigitalIOAdapter
+    | AnalogIOAdapter
+    | XStick
+    | SmartPlug
+    | XBeeLargeDisplay
+    | XBeeSmallDisplay
+    deriving (Show, Eq)
+
+deviceTypeTable :: [(Word32, NodeDeviceType)]
+deviceTypeTable = 
+    [ (0x30000, UnknownDeviceType)
+    , (0x30001, ConnectPortX8Gateway)
+    , (0x30002, ConnectPortX4Gateway)
+    , (0x30003, ConnectPortX2Gateway)
+    , (0x30005, RS232Adapter)
+    , (0x30006, RS485Adapter)
+    , (0x30007, XBeeSensorAdapter)
+    , (0x30008, WallRouter)
+    , (0x3000A, DigitalIOAdapter)
+    , (0x3000B, AnalogIOAdapter)
+    , (0x3000C, XStick)
+    , (0x3000F, SmartPlug)
+    , (0x30011, XBeeLargeDisplay)
+    , (0x30012, XBeeSmallDisplay)
+    ]
+
+instance Serialize NodeDeviceType where
+    get = liftM (fromMaybe UnknownDeviceType . flip lookup deviceTypeTable) getWord32be
+    put = putWord32be . fromJust . flip lookup (map swap deviceTypeTable) 
+
+data BaudRate
+    = B1200
+    | B2400
+    | B4800
+    | B9600
+    | B19200
+    | B38400
+    | B57600
+    | B115200
+    deriving (Show, Eq, Enum)
+
+data ModemStatus 
+    = HardwareReset
+    | WatchdogTimerReset
+    | Associated
+    | Disassociated
+    | SyncLost
+    | CoordinatorRealignment
+    | CoordinatorStarted 
+    deriving (Enum, Show, Eq, Bounded)
 
 newtype CommandName = CommandName (Word8, Word8) deriving (Eq)
 instance Show CommandName where
@@ -144,10 +216,12 @@ commandName :: Char -> Char -> CommandName
 commandName a b = CommandName (c2w a, c2w b)
     where c2w = fromIntegral . fromEnum
 
-data CommandStatus = CmdOK
-                   | CmdError
-                   | CmdInvalidCommand
-                   | CmdInvalidParameter deriving (Enum, Show, Eq, Bounded)
+data CommandStatus 
+    = CmdOK
+    | CmdError
+    | CmdInvalidCommand
+    | CmdInvalidParameter 
+    deriving (Enum, Show, Eq, Bounded)
 
 -- | Disable acknowledgment.
 type DisableAck = Bool
@@ -157,19 +231,20 @@ type AddressBroadcast = Bool
 type PanBroadcast = Bool
 
 -- | Status/Result of a transmitted packet.
-data TransmitStatus =
-                      -- | Packet delivered to the remote XBee.
-                      TransmitSuccess
-                      -- | All retries are expired and no ACK is received.
-                      -- Does not apply to broadcasts.
-                    | TransmitNoAck
-                      -- | Clear Channel Assessment failure. The channel was not available for
-                      -- transmission within the retries (normally two retries).
-                    | TransmitCcaFailure
-                      -- |  Coordinator times out of an indirect transmission.
-                      -- Timeout is defined as (2.5 x SP (Cyclic Sleep Period) parameter value).
-                      -- Does not apply to broadcasts.
-                    | TransmitPurged deriving (Enum, Show, Eq, Bounded)
+data TransmitStatus 
+    -- | Packet delivered to the remote XBee.
+    = TransmitSuccess
+    -- | All retries are expired and no ACK is received.
+    -- Does not apply to broadcasts.
+    | TransmitNoAck
+    -- | Clear Channel Assessment failure. The channel was not available for
+    -- transmission within the retries (normally two retries).
+    | TransmitCcaFailure
+    -- |  Coordinator times out of an indirect transmission.
+    -- Timeout is defined as (2.5 x SP (Cyclic Sleep Period) parameter value).
+    -- Does not apply to broadcasts.
+    | TransmitPurged 
+    deriving (Enum, Show, Eq, Bounded)
 
 
 newtype SignalStrength = SignalStrength Word8 deriving (Eq)
@@ -191,21 +266,24 @@ type ApplyChanges = Bool
 
 {-# ANN module "HLint: ignore Use record patterns" #-}
 -- | Commands or responses sent from the XBee to the computer.
-data CommandIn =  ModemStatusUpdate ModemStatus
-                | ATCommandResponse FrameId CommandName CommandStatus ByteString
-                | RemoteATCommandResponse FrameId Address64 Address16 CommandName CommandStatus ByteString
-                | TransmitResponse FrameId TransmitStatus
-                | Receive64 Address64 SignalStrength AddressBroadcast PanBroadcast ByteString
-                | Receive16 Address16 SignalStrength AddressBroadcast PanBroadcast ByteString
-                  deriving (Show, Eq)
+data CommandIn 
+    = ModemStatusUpdate ModemStatus
+    | ATCommandResponse FrameId CommandName CommandStatus ByteString
+    | RemoteATCommandResponse FrameId Address64 Address16 CommandName CommandStatus ByteString
+    | TransmitResponse FrameId TransmitStatus
+    | Receive64 Address64 SignalStrength AddressBroadcast PanBroadcast ByteString
+    | Receive16 Address16 SignalStrength AddressBroadcast PanBroadcast ByteString
+    deriving (Show, Eq)
+
 -- | Commands sent from to computer to the XBee.
-data CommandOut = ATCommand FrameId CommandName ByteString
-                | ATQueueCommand FrameId CommandName ByteString
-                | RemoteATCommand64 FrameId Address64 ApplyChanges CommandName ByteString
-                | RemoteATCommand16 FrameId Address16 ApplyChanges CommandName ByteString
-                | Transmit64 FrameId Address64 DisableAck BroadcastPan ByteString
-                | Transmit16 FrameId Address16 DisableAck BroadcastPan ByteString
-                  deriving (Show, Eq)
+data CommandOut 
+    = ATCommand FrameId CommandName ByteString
+    | ATQueueCommand FrameId CommandName ByteString
+    | RemoteATCommand64 FrameId Address64 ApplyChanges CommandName ByteString
+    | RemoteATCommand16 FrameId Address16 ApplyChanges CommandName ByteString
+    | Transmit64 FrameId Address64 DisableAck BroadcastPan ByteString
+    | Transmit16 FrameId Address16 DisableAck BroadcastPan ByteString
+    deriving (Show, Eq)
 
 class FrameIdContainer c where
     frameIdFor :: c -> Maybe FrameId
@@ -253,6 +331,15 @@ instance Serialize CommandStatus where
 instance Serialize TransmitStatus where
     get = getEnumWord8
     put = putEnumWord8
+instance Serialize DiscoveryOption where
+    get = getEnumWord8
+    put = putEnumWord8
+instance Serialize NodeType where
+    get = getEnumWord8
+    put = putEnumWord8
+instance Serialize BaudRate where
+    get = liftM (toEnum . fromIntegral) getWord32be
+    put = putWord32be . fromIntegral . fromEnum
 
 instance Serialize CommandIn where
     put (ModemStatusUpdate s) = putWord8 0x8A >> put s

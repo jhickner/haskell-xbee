@@ -91,7 +91,7 @@ data Timeouts = Timeouts { tmoutLocal :: Microsecond,
                            tmoutRemote :: Microsecond }
 defaultTimeouts = Timeouts (convertUnit (1500 :: Millisecond)) (convertUnit (6 :: Second))
 
-type XBeeCorrelator =  Correlator FrameId CommandResponse
+type XBeeCorrelator = Correlator FrameId CommandResponse
 
 
 
