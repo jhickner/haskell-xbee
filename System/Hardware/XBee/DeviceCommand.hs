@@ -6,12 +6,11 @@ module System.Hardware.XBee.DeviceCommand (
     broadcast,
     -- * AT Settings
     atCommand,
+    ATTransport(..),
     ATSetting,
     atSetting,
     getAT,
     setAT,
-    getRemoteAT,
-    setRemoteAT,
     -- * Addressing
     address16,
     address64,
@@ -81,54 +80,40 @@ failOnLeft :: Monad m => Either String a -> m a
 failOnLeft (Left err) = fail err
 failOnLeft (Right v)  = return v
 
-
-atCommand :: (Serialize i, Serialize o) => Char -> Char -> i -> XBeeCmdAsync o
-atCommand c1 c2 i = sendLocal cmd (liftM handle input >>= failOnLeft)
+atCommand :: (Serialize i, Serialize o) => Char -> Char -> i -> ATTransport -> XBeeCmdAsync o
+atCommand c1 c2 i LocalAT = sendLocal cmd (liftM handle input >>= failOnLeft)
     where cmd f = ATCommand f (commandName c1 c2) (encode i)
           handle (CRData (ATCommandResponse _ _ CmdOK d)) = decode d
           handle (CRData (ATCommandResponse _ _ status _)) = Left $ "Failed: " ++ show status
           handle _ = Left "Timeout"
-
-remoteATCommand :: (Serialize i, Serialize o) => Char -> Char 
-                -> Address64 -> ApplyChanges -> i -> XBeeCmdAsync o
-remoteATCommand c1 c2 a64 ac i = sendRemote cmd (liftM handle input >>= failOnLeft)
+atCommand c1 c2 i (RemoteAT a64 ac) = sendRemote cmd (liftM handle input >>= failOnLeft)
     where cmd f = RemoteATCommand64 f a64 ac (commandName c1 c2) (encode i)
           handle (CRData (RemoteATCommandResponse _ _ _ _ CmdOK d)) = decode d
           handle (CRData (RemoteATCommandResponse _ _ _ _ status _)) = Left $ "Failed: " ++ show status
           handle _ = Left "Timeout"
 
+data ATTransport = LocalAT | RemoteAT Address64 ApplyChanges
 
-{-
-data ATSetting a = ATSetting { getAT :: XBeeCmdAsync a,
-                               setAT :: a -> XBeeCmdAsync () }
+data ATSetting a = ATSetting
+    { getAT :: ATTransport -> XBeeCmdAsync a
+    , setAT :: a -> ATTransport -> XBeeCmdAsync ()
+    }
+
+mapAtSetting :: ATSetting a -> (a -> b) -> (b -> a) -> ATSetting b
+mapAtSetting (ATSetting gf sf) f1 f2 = 
+    ATSetting (\t -> liftM (fmap f1) (gf t)) 
+              (\a t -> sf (f2 a) t)
 
 atSetting :: Serialize a => Char -> Char -> ATSetting a
 atSetting c1 c2 = ATSetting (atCommand c1 c2 ()) (atCommand c1 c2)
--}
-
-
-data ATSetting a = ATSetting 
-    { getAT :: XBeeCmdAsync a
-    , setAT :: a -> XBeeCmdAsync () 
-    , getRemoteAT :: Address64 -> XBeeCmdAsync a
-    , setRemoteAT :: Address64 -> ApplyChanges -> a -> XBeeCmdAsync () 
-    }
-
-atSetting :: Serialize a => Char -> Char -> ATSetting a
-atSetting c1 c2 = ATSetting 
-    (atCommand c1 c2 ()) 
-    (atCommand c1 c2)
-    (\a64 -> remoteATCommand c1 c2 a64 False ())
-    (remoteATCommand c1 c2)
-
 
 -- | 16-bit network address of the xbee.
 address16 :: ATSetting Address16
 address16 = atSetting 'M' 'Y'
 
 -- | Immutable 64-bit network address of the xbee.
-address64 :: XBeeCmdAsync Address64
-address64 = combine <$> getAT (a64p 'L') <*> getAT (a64p 'H')
+address64 :: ATTransport -> XBeeCmdAsync Address64
+address64 t = combine <$> getAT (a64p 'L') t <*> getAT (a64p 'H') t
     where
         a64p :: Char -> ATSetting Word32
         a64p = atSetting 'S'
@@ -156,11 +141,6 @@ takeBytes n = process . take n
                 if length e > n then process $ init i
                 else i
 
-mapAtSetting :: ATSetting a -> (a -> b) -> (b -> a) -> ATSetting b
-mapAtSetting = undefined
---mapAtSetting (ATSetting gf sf) f1 f2 = ATSetting gf' (sf . f2)
---    where gf' = liftM (fmap f1) gf
-
 
 nodeIdentifierMaxLength = 20
 
@@ -174,7 +154,7 @@ nodeIdentifier = mapAtSetting (atSetting 'N' 'I') unpackUtf8 enc
 panId :: ATSetting Word64
 panId = atSetting 'I' 'D'
 
-associationIndication :: XBeeCmdAsync AssociationIndication
+associationIndication :: ATTransport -> XBeeCmdAsync AssociationIndication
 associationIndication = atCommand 'A' 'I' ()
 
 data NodeInformation = NodeInformation 
@@ -198,8 +178,8 @@ instance Serialize NodeInformation where
 --   xbee.
 --   All modules on the current operating channel and PAN ID are found.
 discover :: TimeUnit time => time -> XBeeCmdAsync [NodeInformation]
-discover tmo = setAT discoverTimeout (convertUnit tmo) >>= await >>
-               setAT discoveryOption AppendDD >>= await >>
+discover tmo = setAT discoverTimeout (convertUnit tmo) LocalAT >>= await >>
+               setAT discoveryOption AppendDD LocalAT >>= await >>
                localTimeout >>= discover' . tmo'
     where tmo' lcl = convertUnit tmo + lcl
 
@@ -235,17 +215,17 @@ deviceType :: ATSetting NodeDeviceType
 deviceType = atSetting 'D' 'D'
 
 -- | Hardware version of the xbee.
-hardwareVersion :: XBeeCmdAsync Word16
+hardwareVersion :: ATTransport -> XBeeCmdAsync Word16
 hardwareVersion = atCommand 'H' 'V' ()
 
-softwareVersion :: XBeeCmdAsync Word16
+softwareVersion :: ATTransport -> XBeeCmdAsync Word16
 softwareVersion = atCommand 'V' 'R' ()
 
 -- | Used to force a software reset on the RF module. The reset simutates powering off
 -- and then on again the xbee module.
-softwareReset :: XBeeCmdAsync ()
+softwareReset :: ATTransport -> XBeeCmdAsync ()
 softwareReset = atCommand 'F' 'R' ()
 
 -- | Write parameters to non-volatile memory on the RF module.
-write :: XBeeCmdAsync ()
+write :: ATTransport -> XBeeCmdAsync ()
 write = atCommand 'W' 'R' ()
