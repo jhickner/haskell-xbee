@@ -29,6 +29,15 @@ connector1 = connector "/dev/ttyUSB0" $ defaultSettings { Ser.baudRate = Ser.B11
 connector2 = connector "/dev/ttyUSB1" $ defaultSettings
 
 
+{-
+remoteTest = do
+    peers <- runXBee connector1 getPeers
+    let p1 = nodeAddress64 $ head peers
+    let rc = remoteATCommand p1 'M' 'Y' () :: XBeeCmd (Future Word16)
+    runXBee connector1 $ getAT rc >>= await
+    return ()
+-}
+
 main = withSysoutPrint $ startThreadGroup [
 		runXBee connector1 $ showPeers
                 --runXBee connector1 $ initXBee "One" >> sayHi >> showPeers >> sayHiToAll >> sayBye

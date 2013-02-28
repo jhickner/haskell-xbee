@@ -10,6 +10,8 @@ module System.Hardware.XBee.DeviceCommand (
     atSetting,
     getAT,
     setAT,
+    getRemoteAT,
+    setRemoteAT,
     -- * Addressing
     address16,
     address64,
@@ -87,11 +89,38 @@ atCommand c1 c2 i = sendLocal cmd (liftM handle input >>= failOnLeft)
           handle (CRData (ATCommandResponse _ _ status _)) = Left $ "Failed: " ++ show status
           handle _ = Left "Timeout"
 
+remoteATCommand :: (Serialize i, Serialize o) => Char -> Char 
+                -> Address64 -> ApplyChanges -> i -> XBeeCmdAsync o
+remoteATCommand c1 c2 a64 ac i = sendRemote cmd (liftM handle input >>= failOnLeft)
+    where cmd f = RemoteATCommand64 f a64 ac (commandName c1 c2) (encode i)
+          handle (CRData (RemoteATCommandResponse _ _ _ _ CmdOK d)) = decode d
+          handle (CRData (RemoteATCommandResponse _ _ _ _ status _)) = Left $ "Failed: " ++ show status
+          handle _ = Left "Timeout"
+
+
+{-
 data ATSetting a = ATSetting { getAT :: XBeeCmdAsync a,
                                setAT :: a -> XBeeCmdAsync () }
 
 atSetting :: Serialize a => Char -> Char -> ATSetting a
 atSetting c1 c2 = ATSetting (atCommand c1 c2 ()) (atCommand c1 c2)
+-}
+
+
+data ATSetting a = ATSetting 
+    { getAT :: XBeeCmdAsync a
+    , setAT :: a -> XBeeCmdAsync () 
+    , getRemoteAT :: Address64 -> XBeeCmdAsync a
+    , setRemoteAT :: Address64 -> ApplyChanges -> a -> XBeeCmdAsync () 
+    }
+
+atSetting :: Serialize a => Char -> Char -> ATSetting a
+atSetting c1 c2 = ATSetting 
+    (atCommand c1 c2 ()) 
+    (atCommand c1 c2)
+    (\a64 -> remoteATCommand c1 c2 a64 False ())
+    (remoteATCommand c1 c2)
+
 
 -- | 16-bit network address of the xbee.
 address16 :: ATSetting Address16
@@ -128,8 +157,9 @@ takeBytes n = process . take n
                 else i
 
 mapAtSetting :: ATSetting a -> (a -> b) -> (b -> a) -> ATSetting b
-mapAtSetting (ATSetting gf sf) f1 f2 = ATSetting gf' (sf . f2)
-    where gf' = liftM (fmap f1) gf
+mapAtSetting = undefined
+--mapAtSetting (ATSetting gf sf) f1 f2 = ATSetting gf' (sf . f2)
+--    where gf' = liftM (fmap f1) gf
 
 
 nodeIdentifierMaxLength = 20
