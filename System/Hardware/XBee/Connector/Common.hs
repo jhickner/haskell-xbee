@@ -27,6 +27,8 @@ import System.Hardware.XBee.Device
 import System.Hardware.XBee.Command
 import System.Hardware.XBee.Frame
 
+import Debug.Trace
+
 
 
 -- | Sink that schedules the received. The sink is never done.
@@ -46,7 +48,7 @@ sousiConnector c = XBeeConnector o close
                                     toSchedule xif $$ timeoutSink,
                                     src $$ incoming xif,
                                     outgoing xif $$ sink ]
-          close = killThreadGroup
+          close = (\tg -> trace "killed" $ killThreadGroup tg)
 
 -- | Parses CommandIn from ByteStrings.
 byteStringToCmdIn :: Transform ByteString CommandIn

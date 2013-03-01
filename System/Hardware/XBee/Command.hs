@@ -269,16 +269,63 @@ type ApplyChanges = Bool
 data CommandIn 
     = ModemStatusUpdate ModemStatus
     | ATCommandResponse FrameId CommandName CommandStatus ByteString
+    | TransmitStatus FrameId Address16 RetryCount DeliveryStatus DiscoveryStatus
+    | Receive FrameId Address64 Address16 ReceiveOptions ByteString
     | RemoteATCommandResponse FrameId Address64 Address16 CommandName CommandStatus ByteString
-    | TransmitResponse FrameId TransmitStatus
+    | WeirdTransmitResponse FrameId TransmitStatus
     | Receive64 Address64 SignalStrength AddressBroadcast PanBroadcast ByteString
     | Receive16 Address16 SignalStrength AddressBroadcast PanBroadcast ByteString
     deriving (Show, Eq)
+
+type ReceiveOptions = Word8
+{-
+0x01 - Packet Acknowledged
+0x02 - Packet was a broadcast packet
+0x20 - Packet encrypted with APS encryption
+0x40 - Packet was sent from an end device (if known) 
+Note: Option values can be combined. For example, a
+0x40 and a 0x01 will show as a 0x41. Other possible values 0x21, 0x22, 0x41, 0x42, 0x60, 0x61, 0x62.
+-}
+
+
+type RetryCount = Word8
+type DeliveryStatus = Word8
+{-
+0x00 = Success
+0x01 = MAC ACK Failure
+0x02 = CCA Failure
+0x15 = Invalid destination
+endpoint
+0x21 = Network ACK Failure
+0x22 = Not Joined to Network
+0x23 = Self-addressed
+0x24 = Address Not Found
+0x25 = Route Not Found
+0x26 = Broadcast source failed to hear a neighbor relay the message
+0x2B = Invalid binding table index
+0x2C = Resource error lack of free buffers, timers, etc. 
+0x2D = Attempted broadcast with APS transmission 
+0x2E = Attempted unicast with APS transmission, but EE=0
+0x32 = Resource error lack of free buffers, timers, etc. 0x74 = Data payload too large
+-}
+
+type DiscoveryStatus = Word8
+{-
+0x00 = No Discovery Overhead
+0x01 = Address Discovery 
+0x02 = Route Discovery 
+0x03 = Address and Route 
+0x40 = Extended Timeout Discovery
+-}
+
+
 
 -- | Commands sent from to computer to the XBee.
 data CommandOut 
     = ATCommand FrameId CommandName ByteString
     | ATQueueCommand FrameId CommandName ByteString
+    | TransmitRequest64 FrameId Address64 ByteString
+    | TransmitRequest16 FrameId Address16 ByteString
     | RemoteATCommand64 FrameId Address64 ApplyChanges CommandName ByteString
     | RemoteATCommand16 FrameId Address16 ApplyChanges CommandName ByteString
     | Transmit64 FrameId Address64 DisableAck BroadcastPan ByteString
@@ -290,13 +337,16 @@ class FrameIdContainer c where
 instance FrameIdContainer CommandIn where
     frameIdFor (ModemStatusUpdate _) = Nothing
     frameIdFor (ATCommandResponse f _ _ _) = Just f
+    frameIdFor (TransmitStatus f _ _ _ _) = Just f
     frameIdFor (RemoteATCommandResponse f _ _ _ _ _) = Just f
-    frameIdFor (TransmitResponse f _) = Just f
+    frameIdFor (WeirdTransmitResponse f _) = Just f
     frameIdFor (Receive64 _ _ _ _ _) = Nothing
     frameIdFor (Receive16 _ _ _ _ _) = Nothing
 instance FrameIdContainer CommandOut where
     frameIdFor (ATCommand f _ _) = Just f
     frameIdFor (ATQueueCommand f _ _) = Just f
+    frameIdFor (TransmitRequest64 f _ _) = Just f
+    frameIdFor (TransmitRequest16 f _ _) = Just f
     frameIdFor (RemoteATCommand64 f _ _ _ _) = Just f
     frameIdFor (RemoteATCommand16 f _ _ _ _) = Just f
     frameIdFor (Transmit64 f _ _ _ _) = Just f
@@ -341,12 +391,17 @@ instance Serialize BaudRate where
     get = liftM (toEnum . fromIntegral) getWord32be
     put = putWord32be . fromIntegral . fromEnum
 
+    -- | Receive FrameId Address64 Address16 ReceiveOptions ByteString
 instance Serialize CommandIn where
     put (ModemStatusUpdate s) = putWord8 0x8A >> put s
     put (ATCommandResponse f cmd st d) = putWord8 0x88 >> put f >> put cmd >> put st >> putByteString d
+    put (TransmitStatus f a16 retries deliv disc) = putWord8 0x8B >> put f >> put a16 >> put retries >>
+        put deliv >> put disc
+    put (Receive f a64 a16 ropts d) = putWord8 0x90 >> put f >> put a64 >> put a16 >> put ropts >>
+        putByteString d
     put (RemoteATCommandResponse f a64 a16 cmd st d) = putWord8 0x97 >> put f >> put a64 >> put a16 >>
         put cmd >> put st >> putByteString d
-    put (TransmitResponse f st) = putWord8 0x89 >> put f >> put st
+    put (WeirdTransmitResponse f st) = putWord8 0x89 >> put f >> put st
     put (Receive64 a ss adbc panbc d) = putWord8 0x80 >> put a >> put ss >> put opts >> putByteString d
         where opts = bitOpt receiveBitAddress adbc .|. bitOpt receiveBitPan panbc
     put (Receive16 a ss adbc panbc d) = putWord8 0x81 >> put a >> put ss >> put opts >> putByteString d
@@ -354,8 +409,10 @@ instance Serialize CommandIn where
     get = getWord8 >>= getCmdIn where
         getCmdIn 0x8A = liftM ModemStatusUpdate get
         getCmdIn 0x88 = liftM4 ATCommandResponse get get get getTillEnd
+        getCmdIn 0x8B = TransmitStatus <$> get <*> get <*> get <*> get <*> get
         getCmdIn 0x97 = RemoteATCommandResponse <$> get <*> get <*> get <*> get <*> get <*> getTillEnd
-        getCmdIn 0x89 = liftM2 TransmitResponse get get
+        getCmdIn 0x89 = liftM2 WeirdTransmitResponse get get
+        getCmdIn 0x90 = Receive <$> get <*> get <*> get <*> get <*> getTillEnd
         getCmdIn 0x80 = create <$> get <*> get <*> getWord8 <*> getTillEnd
             where create adr ss opts =
                     Receive64 adr ss (testBit opts receiveBitAddress) (testBit opts receiveBitPan)
@@ -369,6 +426,8 @@ receiveBitPan = 2
 instance Serialize CommandOut where
     put (ATCommand f cmd d) = putWord8 0x08 >> put f >> put cmd >> putByteString d
     put (ATQueueCommand f cmd d) = putWord8 0x09 >> put f >> put cmd >> putByteString d
+    put (TransmitRequest64 f a64 d) = putWord8 0x10 >> put f >> put a64 >> putWord16be 0xFFFE >> putByteString d
+    put (TransmitRequest16 f a16 d) = putWord8 0x10 >> put f >> putWord64be 0xFFFF >> put a16 >> putByteString d
     put (RemoteATCommand64 f adr ac cmd d) = putWord8 0x17 >> put f >> put adr >>
             putWord16be 0xFFFE >> put (bitOpt remoteAtCommandBitAC ac) >> put cmd >> putByteString d
     put (RemoteATCommand16 f adr ac cmd d) = putWord8 0x17 >> put f >> putWord64be 0xFFFF >>
@@ -380,6 +439,13 @@ instance Serialize CommandOut where
     get = getWord8 >>= getCmdOut where
         getCmdOut 0x08 = ATCommand <$> get <*> get <*> getTillEnd
         getCmdOut 0x09 = ATQueueCommand <$> get <*> get <*> getTillEnd
+        getCmdOut 0x10 = do
+                f <- get
+                a64 <- get
+                a16 <- get
+                d <- getTillEnd
+                return (if a64 /= broadcastAddress then TransmitRequest64 f a64 d
+                        else TransmitRequest16 f a16 d)
         getCmdOut 0x17 = do
                 f     <- get
                 adr64 <- get

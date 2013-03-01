@@ -19,6 +19,7 @@ import System.Hardware.XBee.DeviceCommand
 import System.Hardware.XBee.Connector.Handle
 import Control.Monad.IO.Class as I
 import Control.Concurrent.ThreadGroup
+import Control.Applicative
 import Print
 
 
@@ -29,41 +30,38 @@ connector1 = connector "/dev/ttyUSB0" $ defaultSettings { Ser.baudRate = Ser.B11
 connector2 = connector "/dev/ttyUSB1" $ defaultSettings
 
 
-{-
 remoteTest = do
-    peers <- runXBee connector1 getPeers
-    let p1 = nodeAddress64 $ head peers
-    let rc = remoteATCommand p1 'M' 'Y' () :: XBeeCmd (Future Word16)
-    runXBee connector1 $ getAT rc >>= await
-    return ()
--}
+    peers <- getPeers
+    let rs = concat . replicate 100 $ map ((\a -> RemoteAT a False) . nodeAddress64) peers
+    mapM (\r -> address64 r >>= await) rs
+
 
 main = withSysoutPrint $ startThreadGroup [
 		runXBee connector1 $ showPeers
                 --runXBee connector1 $ initXBee "One" >> sayHi >> showPeers >> sayHiToAll >> sayBye
                 --runXBee connector2 $ initXBee "Two" >> sayHi >> echoMsgs
             ] >>= awaitThreadGroup >> printLn "Done."
-          
+         
 
-initXBee n = do a  <- setAT address16 disabledAddress
-                ni <- setAT nodeIdentifier n
+initXBee n = do a  <- setLocalAT address16 disabledAddress
+                ni <- setLocalAT nodeIdentifier n
                 await (a >> ni)
 
-sayHi = do a <- address64 >>= await
-           i <- getAT nodeIdentifier >>= await
+sayHi = do a <- (address64 LocalAT) >>= await
+           i <- getLocalAT nodeIdentifier >>= await
            output $ "XBee connected: " ++ show a ++ " (" ++ show i ++ ")"
 
 diagnostics = do
-        out "Address64 = " address64
-        a16 <- getAT address16 >>= await
+        out "Address64 = " (address64 LocalAT)
+        a16 <- getLocalAT address16 >>= await
         output $ "Address16 = " ++ show a16
-        out "Association = " associationIndication
+        out "Association = " (associationIndication LocalAT)
         --setAT address16 (Address16 0x1234) >>= await
-        out "New Address16 = " $ getAT address16
-        out "NodeIdentifier = " $ getAT nodeIdentifier
-        out "PAN-ID = " $ getAT panId
-        out "Hardware Version = " hardwareVersion
-        out "Software Version = " softwareVersion
+        out "New Address16 = " $ getLocalAT address16 
+        out "NodeIdentifier = " $ getLocalAT nodeIdentifier 
+        out "PAN-ID = " $ getLocalAT panId 
+        out "Hardware Version = " (hardwareVersion LocalAT)
+        out "Software Version = " (softwareVersion LocalAT)
         --setAT address16 a16 >>= await
         --showPeers
 

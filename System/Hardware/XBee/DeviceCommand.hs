@@ -11,6 +11,10 @@ module System.Hardware.XBee.DeviceCommand (
     atSetting,
     getAT,
     setAT,
+    getLocalAT,
+    getRemoteAT,
+    setLocalAT,
+    setRemoteAT,
     -- * Addressing
     address16,
     address64,
@@ -62,7 +66,7 @@ transmitCmd (XBeeAddress16 a) noack bdcst d f = Transmit16 f a noack bdcst (BS.t
 -- | Sends up to 100 bytes to another XBee and requests an ack.
 transmit :: XBeeAddress -> ByteString -> XBeeCmdAsync TransmitStatus
 transmit to d = sendRemote cmd (liftM handle input)
-    where handle (CRData (TransmitResponse _ r)) = r
+    where handle (CRData (WeirdTransmitResponse _ r)) = r
           handle _ = TransmitNoAck
           cmd = transmitCmd to False False d
 
@@ -98,6 +102,11 @@ data ATSetting a = ATSetting
     { getAT :: ATTransport -> XBeeCmdAsync a
     , setAT :: a -> ATTransport -> XBeeCmdAsync ()
     }
+
+getLocalAT s = getAT s LocalAT
+getRemoteAT s a64 ac = getAT s $ RemoteAT a64 ac
+setLocalAT s v = setAT s v LocalAT
+setRemoteAT s v a64 ac = setAT s v $ RemoteAT a64 ac
 
 mapAtSetting :: ATSetting a -> (a -> b) -> (b -> a) -> ATSetting b
 mapAtSetting (ATSetting gf sf) f1 f2 = 
