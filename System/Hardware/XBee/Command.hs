@@ -18,20 +18,16 @@ module System.Hardware.XBee.Command (
     AssociationIndication(..),
     -- * Various
     BaudRate(..),
-    SignalStrength,
     -- * Command
     CommandName,
     commandName,
     CommandStatus(..),
     ModemStatus(..),
-    DisableAck,
-    BroadcastPan,
-    dBm,
-    fromDbm,
-    TransmitStatus(..),
     ApplyChanges,
     CommandIn(..),
     CommandOut(..),
+    DeliveryStatus,
+    DiscoveryStatus,
     -- * Conversion to/from frame
     commandToFrame,
     frameToCommand
@@ -223,43 +219,6 @@ data CommandStatus
     | CmdInvalidParameter 
     deriving (Enum, Show, Eq, Bounded)
 
--- | Disable acknowledgment.
-type DisableAck = Bool
--- | Send packet with broadcast Pan ID.
-type BroadcastPan = Bool
-type AddressBroadcast = Bool
-type PanBroadcast = Bool
-
--- | Status/Result of a transmitted packet.
-data TransmitStatus 
-    -- | Packet delivered to the remote XBee.
-    = TransmitSuccess
-    -- | All retries are expired and no ACK is received.
-    -- Does not apply to broadcasts.
-    | TransmitNoAck
-    -- | Clear Channel Assessment failure. The channel was not available for
-    -- transmission within the retries (normally two retries).
-    | TransmitCcaFailure
-    -- |  Coordinator times out of an indirect transmission.
-    -- Timeout is defined as (2.5 x SP (Cyclic Sleep Period) parameter value).
-    -- Does not apply to broadcasts.
-    | TransmitPurged 
-    deriving (Enum, Show, Eq, Bounded)
-
-
-newtype SignalStrength = SignalStrength Word8 deriving (Eq)
--- | Signal strength in dBm (negative value, 0 is best).
-dBm :: SignalStrength -> Int
-dBm (SignalStrength s) = negate $ fromIntegral s
--- | Creates a signal strength. Values >0 and <255 will be truncated to 0 resp. 255.
-fromDbm :: Int -> SignalStrength
-fromDbm v | v > 0      = SignalStrength 0
-          | v < (-255) = SignalStrength 255
-          | otherwise  = SignalStrength (fromIntegral (-v))
-instance Show SignalStrength where
-    show = (++ " dBm") . show . dBm
-instance Ord SignalStrength where
-    a <= b = dBm a <= dBm b
 
 -- | Whether to apply to changes on the remote. If set to False then an AC command must be sent.
 type ApplyChanges = Bool
@@ -270,11 +229,8 @@ data CommandIn
     = ModemStatusUpdate ModemStatus
     | ATCommandResponse FrameId CommandName CommandStatus ByteString
     | TransmitStatus FrameId Address16 RetryCount DeliveryStatus DiscoveryStatus
-    | Receive FrameId Address64 Address16 ReceiveOptions ByteString
+    | Receive Address64 Address16 ReceiveOptions ByteString
     | RemoteATCommandResponse FrameId Address64 Address16 CommandName CommandStatus ByteString
-    | WeirdTransmitResponse FrameId TransmitStatus
-    | Receive64 Address64 SignalStrength AddressBroadcast PanBroadcast ByteString
-    | Receive16 Address16 SignalStrength AddressBroadcast PanBroadcast ByteString
     deriving (Show, Eq)
 
 type ReceiveOptions = Word8
@@ -324,12 +280,10 @@ type DiscoveryStatus = Word8
 data CommandOut 
     = ATCommand FrameId CommandName ByteString
     | ATQueueCommand FrameId CommandName ByteString
-    | TransmitRequest64 FrameId Address64 ByteString
-    | TransmitRequest16 FrameId Address16 ByteString
+    | Transmit64 FrameId Address64 ByteString
+    | Transmit16 FrameId Address16 ByteString
     | RemoteATCommand64 FrameId Address64 ApplyChanges CommandName ByteString
     | RemoteATCommand16 FrameId Address16 ApplyChanges CommandName ByteString
-    | Transmit64 FrameId Address64 DisableAck BroadcastPan ByteString
-    | Transmit16 FrameId Address16 DisableAck BroadcastPan ByteString
     deriving (Show, Eq)
 
 class FrameIdContainer c where
@@ -338,19 +292,15 @@ instance FrameIdContainer CommandIn where
     frameIdFor (ModemStatusUpdate _) = Nothing
     frameIdFor (ATCommandResponse f _ _ _) = Just f
     frameIdFor (TransmitStatus f _ _ _ _) = Just f
+    frameIdFor (Receive _ _ _ _) = Nothing
     frameIdFor (RemoteATCommandResponse f _ _ _ _ _) = Just f
-    frameIdFor (WeirdTransmitResponse f _) = Just f
-    frameIdFor (Receive64 _ _ _ _ _) = Nothing
-    frameIdFor (Receive16 _ _ _ _ _) = Nothing
 instance FrameIdContainer CommandOut where
     frameIdFor (ATCommand f _ _) = Just f
     frameIdFor (ATQueueCommand f _ _) = Just f
-    frameIdFor (TransmitRequest64 f _ _) = Just f
-    frameIdFor (TransmitRequest16 f _ _) = Just f
+    frameIdFor (Transmit64 f _ _) = Just f
+    frameIdFor (Transmit16 f _ _) = Just f
     frameIdFor (RemoteATCommand64 f _ _ _ _) = Just f
     frameIdFor (RemoteATCommand16 f _ _ _ _) = Just f
-    frameIdFor (Transmit64 f _ _ _ _) = Just f
-    frameIdFor (Transmit16 f _ _ _ _) = Just f
 
 -- | Serializes an (outgoing) command into a frame.
 commandToFrame :: CommandOut -> Frame
@@ -364,9 +314,6 @@ frameToCommand = decode . frameData
 instance Serialize CommandName where
     get = liftM CommandName $ liftM2 (,) getWord8 getWord8
     put (CommandName (b1,b2)) = putWord8 b1 >> putWord8 b2
-instance Serialize SignalStrength where
-    get = liftM SignalStrength getWord8
-    put (SignalStrength s) = putWord8 s
 
 getEnumWord8 :: (Enum e) => Get e
 getEnumWord8 = liftM (toEnum . fromIntegral) getWord8
@@ -376,9 +323,6 @@ instance Serialize ModemStatus where
     get = getEnumWord8
     put = putEnumWord8
 instance Serialize CommandStatus where
-    get = getEnumWord8
-    put = putEnumWord8
-instance Serialize TransmitStatus where
     get = getEnumWord8
     put = putEnumWord8
 instance Serialize DiscoveryOption where
@@ -397,28 +341,15 @@ instance Serialize CommandIn where
     put (ATCommandResponse f cmd st d) = putWord8 0x88 >> put f >> put cmd >> put st >> putByteString d
     put (TransmitStatus f a16 retries deliv disc) = putWord8 0x8B >> put f >> put a16 >> put retries >>
         put deliv >> put disc
-    put (Receive f a64 a16 ropts d) = putWord8 0x90 >> put f >> put a64 >> put a16 >> put ropts >>
-        putByteString d
+    put (Receive a64 a16 ropts d) = putWord8 0x90 >> put a64 >> put a16 >> put ropts >> putByteString d
     put (RemoteATCommandResponse f a64 a16 cmd st d) = putWord8 0x97 >> put f >> put a64 >> put a16 >>
         put cmd >> put st >> putByteString d
-    put (WeirdTransmitResponse f st) = putWord8 0x89 >> put f >> put st
-    put (Receive64 a ss adbc panbc d) = putWord8 0x80 >> put a >> put ss >> put opts >> putByteString d
-        where opts = bitOpt receiveBitAddress adbc .|. bitOpt receiveBitPan panbc
-    put (Receive16 a ss adbc panbc d) = putWord8 0x81 >> put a >> put ss >> put opts >> putByteString d
-        where opts = bitOpt receiveBitAddress adbc .|. bitOpt receiveBitPan panbc
     get = getWord8 >>= getCmdIn where
         getCmdIn 0x8A = liftM ModemStatusUpdate get
         getCmdIn 0x88 = liftM4 ATCommandResponse get get get getTillEnd
         getCmdIn 0x8B = TransmitStatus <$> get <*> get <*> get <*> get <*> get
         getCmdIn 0x97 = RemoteATCommandResponse <$> get <*> get <*> get <*> get <*> get <*> getTillEnd
-        getCmdIn 0x89 = liftM2 WeirdTransmitResponse get get
-        getCmdIn 0x90 = Receive <$> get <*> get <*> get <*> get <*> getTillEnd
-        getCmdIn 0x80 = create <$> get <*> get <*> getWord8 <*> getTillEnd
-            where create adr ss opts =
-                    Receive64 adr ss (testBit opts receiveBitAddress) (testBit opts receiveBitPan)
-        getCmdIn 0x81 = create <$> get <*> get <*> getWord8 <*> getTillEnd
-            where create adr ss opts =
-                    Receive16 adr ss (testBit opts receiveBitAddress) (testBit opts receiveBitPan)
+        getCmdIn 0x90 = Receive <$> get <*> get <*> get <*> getTillEnd
         getCmdIn o    = fail $ "undefined XBee->PC command " ++ show o
 receiveBitAddress = 1
 receiveBitPan = 2
@@ -426,16 +357,14 @@ receiveBitPan = 2
 instance Serialize CommandOut where
     put (ATCommand f cmd d) = putWord8 0x08 >> put f >> put cmd >> putByteString d
     put (ATQueueCommand f cmd d) = putWord8 0x09 >> put f >> put cmd >> putByteString d
-    put (TransmitRequest64 f a64 d) = putWord8 0x10 >> put f >> put a64 >> putWord16be 0xFFFE >> putByteString d
-    put (TransmitRequest16 f a16 d) = putWord8 0x10 >> put f >> putWord64be 0xFFFF >> put a16 >> putByteString d
+    put (Transmit64 f a64 d) = putWord8 0x10 >> put f >> put a64 >> putWord16be 0xFFFE >> 
+        putWord8 transmitBroadcastRadius >> putWord8 transmitOptions >> putByteString d
+    put (Transmit16 f a16 d) = putWord8 0x10 >> put f >> putWord64be 0xFFFF >> put a16 >> 
+        putWord8 transmitBroadcastRadius >> putWord8 transmitOptions >> putByteString d
     put (RemoteATCommand64 f adr ac cmd d) = putWord8 0x17 >> put f >> put adr >>
             putWord16be 0xFFFE >> put (bitOpt remoteAtCommandBitAC ac) >> put cmd >> putByteString d
     put (RemoteATCommand16 f adr ac cmd d) = putWord8 0x17 >> put f >> putWord64be 0xFFFF >>
             put adr >> put (bitOpt remoteAtCommandBitAC ac) >> put cmd >> putByteString d
-    put (Transmit64 f adr dack bc d) = putWord8 0x00 >> put f >> put adr >> put opts >> putByteString d
-        where opts = bitOpt transmitBitDisableAck dack .|. bitOpt transmitBitPanBroadcast bc
-    put (Transmit16 f adr dack bc d) = putWord8 0x01 >> put f >> put adr >> put opts >> putByteString d
-        where opts = bitOpt transmitBitDisableAck dack .|. bitOpt transmitBitPanBroadcast bc
     get = getWord8 >>= getCmdOut where
         getCmdOut 0x08 = ATCommand <$> get <*> get <*> getTillEnd
         getCmdOut 0x09 = ATQueueCommand <$> get <*> get <*> getTillEnd
@@ -443,9 +372,10 @@ instance Serialize CommandOut where
                 f <- get
                 a64 <- get
                 a16 <- get
+                getWord8 >> getWord8 -- Broadcast Radius and Options
                 d <- getTillEnd
-                return (if a64 /= broadcastAddress then TransmitRequest64 f a64 d
-                        else TransmitRequest16 f a16 d)
+                return (if a64 /= broadcastAddress then Transmit64 f a64 d
+                        else Transmit16 f a16 d)
         getCmdOut 0x17 = do
                 f     <- get
                 adr64 <- get
@@ -455,16 +385,10 @@ instance Serialize CommandOut where
                 d     <- getTillEnd
                 return (if   adr64 /= broadcastAddress then RemoteATCommand64 f adr64 ac cmd d
                         else RemoteATCommand16 f adr16 ac cmd d)
-        getCmdOut 0x00 = create <$> get <*> get <*> getWord8 <*> getTillEnd
-            where create f adr opts =
-                    Transmit64 f adr (testBit opts transmitBitDisableAck) (testBit opts transmitBitPanBroadcast)
-        getCmdOut 0x01 = create <$> get <*> get <*> getWord8 <*> getTillEnd
-            where create f adr opts =
-                    Transmit16 f adr (testBit opts transmitBitDisableAck) (testBit opts transmitBitPanBroadcast)
         getCmdOut o    = fail $ "undefined PC->XBee command " ++ show o
+transmitBroadcastRadius = 0
+transmitOptions = 0
 remoteAtCommandBitAC = 1
-transmitBitDisableAck = 1
-transmitBitPanBroadcast = 3
 
 
 bitOpt :: Int -> Bool -> Word8

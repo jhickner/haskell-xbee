@@ -1,9 +1,9 @@
 module System.Hardware.XBee.DeviceCommand (
     -- * Transmitting data
-    transmitBytes,
+    --transmitBytes,
     transmit,
     transmitNoAck,
-    broadcast,
+    --broadcast,
     -- * AT Settings
     atCommand,
     ATTransport(..),
@@ -57,6 +57,7 @@ sendRemote cmd handler = remoteTimeout >>= flip send (FrameCmd cmd handler)
 
 
 
+{-
 -- | Maximum number of bytes that can be transmitted with a single transmit call.
 transmitBytes = 100
 
@@ -78,7 +79,19 @@ transmitNoAck to d = fire $ transmitCmd to True False d noFrameId
 -- | Broadcasts up to 100 bytes to all XBees within the same network.
 broadcast :: ByteString -> XBeeCmd ()
 broadcast d = fire $ transmitCmd (XBeeAddress64 broadcastAddress) True True d noFrameId
+-}
 
+transmitCmd (XBeeAddress64 a) d f = Transmit64 f a d
+transmitCmd (XBeeAddress16 a) d f = Transmit16 f a d
+
+transmit :: XBeeAddress -> ByteString -> XBeeCmdAsync CommandIn
+transmit adr d = sendRemote cmd (liftM handle input >>= failOnLeft)
+    where cmd = transmitCmd adr d
+	  handle (CRData t@TransmitStatus{}) = Right t
+          handle _ = Left "Timeout"
+
+transmitNoAck :: XBeeAddress -> ByteString -> XBeeCmd ()
+transmitNoAck adr d = fire $ transmitCmd adr d noFrameId --noFrameId
 
 failOnLeft :: Monad m => Either String a -> m a
 failOnLeft (Left err) = fail err

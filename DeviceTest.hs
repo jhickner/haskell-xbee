@@ -22,6 +22,7 @@ import Control.Concurrent.ThreadGroup
 import Control.Applicative
 import Print
 
+import qualified Data.ByteString.Char8 as B
 
 connector  f s = handleConnector $ openSerialPort f s
 --connector  f s = handleConnector $ openSerialPort f s
@@ -29,17 +30,26 @@ connector  f s = handleConnector $ openSerialPort f s
 connector1 = connector "/dev/ttyUSB0" $ defaultSettings { Ser.baudRate = Ser.B115200 }
 connector2 = connector "/dev/ttyUSB1" $ defaultSettings
 
+addrs = [Address64 0x13a2004098b28c, Address64 0x13a2004092d041]
 
 remoteTest = do
     peers <- getPeers
     let rs = concat . replicate 100 $ map ((\a -> RemoteAT a False) . nodeAddress64) peers
     mapM (\r -> address64 r >>= await) rs
 
+transmitTest = do
+    let rs = map XBeeAddress64 addrs
+    mapM (\a -> transmit a (B.pack "test") >>= await) rs
+    --outputRaws
+    --transmit (head rs) (B.pack "test") >>= await
+
+outputRaws = rawInSource $$ T.map show =$ outSink
+
+outSink :: MonadIO m => Sink String m ()
+outSink = actionSink (I.liftIO . printLn)
 
 main = withSysoutPrint $ startThreadGroup [
 		runXBee connector1 $ showPeers
-                --runXBee connector1 $ initXBee "One" >> sayHi >> showPeers >> sayHiToAll >> sayBye
-                --runXBee connector2 $ initXBee "Two" >> sayHi >> echoMsgs
             ] >>= awaitThreadGroup >> printLn "Done."
          
 
@@ -76,6 +86,7 @@ showPeers = do
     where formatNode n = "- " ++ show (nodeAddress64 n) ++ " called " ++
               show (nodeId n)
 
+{-
 sayHiToAll = do
         broadcast $ utfToBs "Hi everybody"
         nodes <- discover (300 :: Millisecond) >>= await
@@ -118,6 +129,7 @@ replySink f = do msg <- inputMaybe
 
 outSink :: MonadIO m => Sink String m ()
 outSink = actionSink (I.liftIO . printLn)
+-}
 
 
 output = liftIO . printLn

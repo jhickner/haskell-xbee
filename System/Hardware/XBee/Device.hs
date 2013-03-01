@@ -23,8 +23,8 @@ module System.Hardware.XBee.Device (
     FrameCmd(..),
     -- ** Source
     rawInSource,
-    ReceivedMessage(..),
-    messagesSource,
+    --ReceivedMessage(..),
+    --messagesSource,
     modemStatusSource,
     -- ** Future
     Future,
@@ -205,12 +205,14 @@ setTimeouts :: (TimeUnit local, TimeUnit remote) => local -> remote -> XBeeCmd (
 setTimeouts lcal remote = put $ Timeouts (convertUnit lcal) (convertUnit remote)
 
 
+{-
 -- | An incoming message (abstracts over Receive64 and Receive16)
 data ReceivedMessage = ReceivedMessage { sender :: XBeeAddress,
                                          signal :: SignalStrength,
                                          addressBroadcast :: Bool,
                                          panBroadcast :: Bool,
                                          messageBody :: ByteString } deriving (Show,Eq)
+-}
 
 -- | Source for all incoming commands from the XBee. This includes replies to framed command
 -- that are also handled by a CommandHandler from send.
@@ -225,6 +227,7 @@ rawInSource = FeedSource fun
 dequeue :: TChan a -> XBeeCmd a
 dequeue = liftIO . atomically . readTChan
 
+{-
 -- Transformer for CommandIn into ReceivedMessage.
 commandInToReceivedMessage :: Transform CommandIn ReceivedMessage
 commandInToReceivedMessage = T.filterMap step
@@ -235,6 +238,7 @@ commandInToReceivedMessage = T.filterMap step
 -- | Source for all messages received from remote XBees (Receive16 and Receive64).
 messagesSource :: SimpleSource XBeeCmd ReceivedMessage
 messagesSource = rawInSource $= commandInToReceivedMessage
+-}
 
 -- | Source for modem status updates.
 modemStatusSource ::  SimpleSource XBeeCmd ModemStatus
