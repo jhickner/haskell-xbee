@@ -55,43 +55,23 @@ import Debug.Trace
 sendLocal  cmd handler = localTimeout  >>= flip send (FrameCmd cmd handler)
 sendRemote cmd handler = remoteTimeout >>= flip send (FrameCmd cmd handler)
 
-
-
-{-
--- | Maximum number of bytes that can be transmitted with a single transmit call.
-transmitBytes = 100
-
-transmitCmd (XBeeAddress64 a) noack bdcst d f = Transmit64 f a noack bdcst (BS.take transmitBytes d)
-transmitCmd (XBeeAddress16 a) noack bdcst d f = Transmit16 f a noack bdcst (BS.take transmitBytes d)
-
--- | Sends up to 100 bytes to another XBee and requests an ack.
-transmit :: XBeeAddress -> ByteString -> XBeeCmdAsync TransmitStatus
-transmit to d = sendRemote cmd (liftM handle input)
-    where handle (CRData (WeirdTransmitResponse _ r)) = r
-          handle _ = TransmitNoAck
-          cmd = transmitCmd to False False d
-
--- | Sends up to 100 bytes to another XBee without requesting an acknowledgement. There
---   is no way to tell whether the transmission succeeded or not.
-transmitNoAck :: XBeeAddress -> ByteString -> XBeeCmd ()
-transmitNoAck to d = fire $ transmitCmd to True False d noFrameId
-
--- | Broadcasts up to 100 bytes to all XBees within the same network.
-broadcast :: ByteString -> XBeeCmd ()
-broadcast d = fire $ transmitCmd (XBeeAddress64 broadcastAddress) True True d noFrameId
--}
-
 transmitCmd (XBeeAddress64 a) d f = Transmit64 f a d
 transmitCmd (XBeeAddress16 a) d f = Transmit16 f a d
 
-transmit :: XBeeAddress -> ByteString -> XBeeCmdAsync CommandIn
-transmit adr d = sendRemote cmd (liftM handle input >>= failOnLeft)
+transmit :: XBeeAddress -> ByteString -> XBeeCmdAsync [CommandIn]
+transmit adr d = sendRemote cmd (input >>= handle [])
     where cmd = transmitCmd adr d
-	  handle (CRData t@TransmitStatus{}) = Right t
-          handle _ = Left "Timeout"
+          handle :: [CommandIn] -> CommandResponse -> CommandHandler [CommandIn]
+          handle soFar (CRData t) = input >>= handle (t:soFar)
+          handle soFar _ = return soFar
+          --handle _ = fail $ "Timeout"
 
 transmitNoAck :: XBeeAddress -> ByteString -> XBeeCmd ()
-transmitNoAck adr d = fire $ transmitCmd adr d noFrameId --noFrameId
+transmitNoAck adr d = fire $ transmitCmd adr d noFrameId
+
+-- | Broadcasts to all XBees within the same network.
+broadcast :: ByteString -> XBeeCmd ()
+broadcast d = fire $ transmitCmd (XBeeAddress64 broadcastAddress) d noFrameId
 
 failOnLeft :: Monad m => Either String a -> m a
 failOnLeft (Left err) = fail err
@@ -109,7 +89,7 @@ atCommand c1 c2 i (RemoteAT a64 ac) = sendRemote cmd (liftM handle input >>= fai
           handle (CRData (RemoteATCommandResponse _ _ _ _ status _)) = Left $ "Failed: " ++ show status
           handle _ = Left "Timeout"
 
-data ATTransport = LocalAT | RemoteAT Address64 ApplyChanges
+data ATTransport = LocalAT | RemoteAT Address64 ApplyChanges deriving Show
 
 data ATSetting a = ATSetting
     { getAT :: ATTransport -> XBeeCmdAsync a
@@ -117,8 +97,9 @@ data ATSetting a = ATSetting
     }
 
 getLocalAT s = getAT s LocalAT
-getRemoteAT s a64 ac = getAT s $ RemoteAT a64 ac
 setLocalAT s v = setAT s v LocalAT
+
+getRemoteAT s a64 ac = getAT s $ RemoteAT a64 ac
 setRemoteAT s v a64 ac = setAT s v $ RemoteAT a64 ac
 
 mapAtSetting :: ATSetting a -> (a -> b) -> (b -> a) -> ATSetting b
@@ -179,23 +160,6 @@ panId = atSetting 'I' 'D'
 associationIndication :: ATTransport -> XBeeCmdAsync AssociationIndication
 associationIndication = atCommand 'A' 'I' ()
 
-data NodeInformation = NodeInformation 
-    { nodeNetworkAddress :: Word16
-    , nodeAddress64 :: Address64
-    , nodeId :: String
-    -- , nodeParentNetworkAddress :: Address16
-    -- , nodeType :: NodeType
-    -- , nodeStatus :: Word8
-    -- , nodeProfileId :: Word16
-    -- , nodeManufacturerId :: Word16 
-    -- , nodeDeviceType :: NodeDeviceType
-    } deriving (Show, Eq)
-instance Serialize NodeInformation where
-    get = NodeInformation <$> get <*> get
-                          <*> liftM (takeWhile (/= '\0') . unpackUtf8) get -- TODO: figure out how to takeWhile
-    put (NodeInformation nmy n64 nid) = put nmy >> put n64 >> put nid
-
-
 -- | Discovers all nodes on that can be reached from this xbee. Does not include this
 --   xbee.
 --   All modules on the current operating channel and PAN ID are found.
@@ -209,13 +173,11 @@ discover' :: TimeUnit time => time -> XBeeCmdAsync [NodeInformation]
 discover' tmout = send tmout $ FrameCmd cmd (input >>= handle [])
     where cmd f = ATCommand f (commandName 'N' 'D') BS.empty
           handle :: [NodeInformation] -> CommandResponse -> CommandHandler [NodeInformation]
-          handle soFar (CRData (ATCommandResponse _ _ CmdOK d))
-                | BS.null d = return soFar
-                | otherwise = do ni <- failOnLeft $ decode d
-                                 input >>= handle (ni:soFar)
+          handle soFar (CRData (ATCommandResponse _ _ CmdOK d)) = 
+              do ni <- failOnLeft $ decode d
+                 input >>= handle (ni:soFar)
           handle _     (CRData (ATCommandResponse _ _ status _)) = fail $ "Failed: " ++ show status
-          --handle _ _ = fail "Timeout"
-          handle soFar _ = traceShow soFar $ return soFar
+          handle soFar _ = return soFar
 
 -- | Set/Get the node discover timeout.
 discoverTimeout :: ATSetting Millisecond

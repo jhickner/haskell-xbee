@@ -48,7 +48,7 @@ sousiConnector c = XBeeConnector o close
                                     toSchedule xif $$ timeoutSink,
                                     src $$ incoming xif,
                                     outgoing xif $$ sink ]
-          close = (\tg -> trace "killed" $ killThreadGroup tg)
+          close = killThreadGroup
 
 -- | Parses CommandIn from ByteStrings.
 byteStringToCmdIn :: Transform ByteString CommandIn

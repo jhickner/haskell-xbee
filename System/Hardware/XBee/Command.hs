@@ -12,6 +12,7 @@ module System.Hardware.XBee.Command (
     broadcastAddress,
     disabledAddress,
     -- * Discover
+    NodeInformation(..),
     NodeType(..),
     NodeDeviceType(..),
     DiscoveryOption(..),
@@ -40,11 +41,13 @@ import Data.Circular
 import Data.Maybe (fromJust, fromMaybe)
 import Data.Serialize
 import Data.Tuple (swap)
-import Data.ByteString (ByteString)
+import Data.ByteString (pack, ByteString)
+import qualified Codec.Binary.UTF8.String as S
 import Control.Monad
 import Control.Applicative
 import System.Hardware.XBee.Frame
 
+import Debug.Trace
 
 newtype FrameId = FrameId Word8 deriving (Show, Eq, Ord)
 -- | Don't use a FrameId.
@@ -138,6 +141,30 @@ instance Serialize AssociationIndication where
     get = liftM (fromMaybe UnknownIndication . flip lookup associationTable) getWord8
     put = putWord8 . fromJust . flip lookup (map swap associationTable) 
 
+data NodeInformation = NodeInformation 
+    { nodeNetworkAddress :: Address16
+    , nodeAddress64 :: Address64
+    , nodeId :: String
+    , nodeParentNetworkAddress :: Address16
+    , nodeType :: NodeType
+    , nodeStatus :: Word8
+    , nodeProfileId :: Word16
+    , nodeManufacturerId :: Word16 
+    , nodeDeviceType :: NodeDeviceType
+    } deriving (Show, Eq)
+
+instance Serialize NodeInformation where
+    get = NodeInformation <$> get <*> get <*> liftM S.decode (takeWhile' (/= 0))
+                          <*> get <*> get <*> get <*> get <*> get <*> get
+    put = error "Can't serialize NodeInformation"
+
+takeWhile' :: (Word8 -> Bool) -> Get [Word8]
+takeWhile' p = getWord8 >>= go []
+  where
+  go is i = if p i
+              then getWord8 >>= go (i:is)
+              else return (reverse is)
+
 data NodeType
     = Coordinator
     | Router
@@ -223,15 +250,6 @@ data CommandStatus
 -- | Whether to apply to changes on the remote. If set to False then an AC command must be sent.
 type ApplyChanges = Bool
 
-{-# ANN module "HLint: ignore Use record patterns" #-}
--- | Commands or responses sent from the XBee to the computer.
-data CommandIn 
-    = ModemStatusUpdate ModemStatus
-    | ATCommandResponse FrameId CommandName CommandStatus ByteString
-    | TransmitStatus FrameId Address16 RetryCount DeliveryStatus DiscoveryStatus
-    | Receive Address64 Address16 ReceiveOptions ByteString
-    | RemoteATCommandResponse FrameId Address64 Address16 CommandName CommandStatus ByteString
-    deriving (Show, Eq)
 
 type ReceiveOptions = Word8
 {-
@@ -276,15 +294,6 @@ type DiscoveryStatus = Word8
 
 
 
--- | Commands sent from to computer to the XBee.
-data CommandOut 
-    = ATCommand FrameId CommandName ByteString
-    | ATQueueCommand FrameId CommandName ByteString
-    | Transmit64 FrameId Address64 ByteString
-    | Transmit16 FrameId Address16 ByteString
-    | RemoteATCommand64 FrameId Address64 ApplyChanges CommandName ByteString
-    | RemoteATCommand16 FrameId Address16 ApplyChanges CommandName ByteString
-    deriving (Show, Eq)
 
 class FrameIdContainer c where
     frameIdFor :: c -> Maybe FrameId
@@ -335,24 +344,38 @@ instance Serialize BaudRate where
     get = liftM (toEnum . fromIntegral) getWord32be
     put = putWord32be . fromIntegral . fromEnum
 
-    -- | Receive FrameId Address64 Address16 ReceiveOptions ByteString
+{-# ANN module "HLint: ignore Use record patterns" #-}
+-- | Commands or responses sent from the XBee to the computer.
+data CommandIn 
+    = ModemStatusUpdate ModemStatus
+    | ATCommandResponse FrameId CommandName CommandStatus ByteString
+    | TransmitStatus FrameId Address16 RetryCount DeliveryStatus DiscoveryStatus
+    | Receive Address64 Address16 ReceiveOptions ByteString
+    | RemoteATCommandResponse FrameId Address64 Address16 CommandName CommandStatus ByteString
+    | TempCatchAll ByteString
+    deriving (Show, Eq)
+
+-- | Commands sent from to computer to the XBee.
+data CommandOut 
+    = ATCommand FrameId CommandName ByteString
+    | ATQueueCommand FrameId CommandName ByteString
+    | Transmit64 FrameId Address64 ByteString
+    | Transmit16 FrameId Address16 ByteString
+    | RemoteATCommand64 FrameId Address64 ApplyChanges CommandName ByteString
+    | RemoteATCommand16 FrameId Address16 ApplyChanges CommandName ByteString
+    deriving (Show, Eq)
+
 instance Serialize CommandIn where
-    put (ModemStatusUpdate s) = putWord8 0x8A >> put s
-    put (ATCommandResponse f cmd st d) = putWord8 0x88 >> put f >> put cmd >> put st >> putByteString d
-    put (TransmitStatus f a16 retries deliv disc) = putWord8 0x8B >> put f >> put a16 >> put retries >>
-        put deliv >> put disc
-    put (Receive a64 a16 ropts d) = putWord8 0x90 >> put a64 >> put a16 >> put ropts >> putByteString d
-    put (RemoteATCommandResponse f a64 a16 cmd st d) = putWord8 0x97 >> put f >> put a64 >> put a16 >>
-        put cmd >> put st >> putByteString d
-    get = getWord8 >>= getCmdIn where
-        getCmdIn 0x8A = liftM ModemStatusUpdate get
-        getCmdIn 0x88 = liftM4 ATCommandResponse get get get getTillEnd
+    put = error "Can't serialize CommandIn"
+    get = getWord8 >>= (\c -> traceShow c $ getCmdIn c) where
+        getCmdIn 0x8A = ModemStatusUpdate <$> get
+        getCmdIn 0x88 = ATCommandResponse <$> get <*> get <*> get <*> getTillEnd
         getCmdIn 0x8B = TransmitStatus <$> get <*> get <*> get <*> get <*> get
         getCmdIn 0x97 = RemoteATCommandResponse <$> get <*> get <*> get <*> get <*> get <*> getTillEnd
+        --getCmdIn 0x90 = Receive <$> get <*> get <*> get <*> getTillEnd
         getCmdIn 0x90 = Receive <$> get <*> get <*> get <*> getTillEnd
-        getCmdIn o    = fail $ "undefined XBee->PC command " ++ show o
-receiveBitAddress = 1
-receiveBitPan = 2
+        --getCmdIn o    = trace ("unknown: " ++ show o) (TempCatchAll <$> getTillEnd)
+        --getCmdIn o    = trace ("undefined XBee -> PC Command: " ++ show o) $ fail $ "undefined XBee->PC command " ++ show o
 
 instance Serialize CommandOut where
     put (ATCommand f cmd d) = putWord8 0x08 >> put f >> put cmd >> putByteString d
@@ -362,34 +385,14 @@ instance Serialize CommandOut where
     put (Transmit16 f a16 d) = putWord8 0x10 >> put f >> putWord64be 0xFFFF >> put a16 >> 
         putWord8 transmitBroadcastRadius >> putWord8 transmitOptions >> putByteString d
     put (RemoteATCommand64 f adr ac cmd d) = putWord8 0x17 >> put f >> put adr >>
-            putWord16be 0xFFFE >> put (bitOpt remoteAtCommandBitAC ac) >> put cmd >> putByteString d
+        putWord16be 0xFFFE >> put (bitOpt remoteAtCommandBitAC ac) >> put cmd >> putByteString d
     put (RemoteATCommand16 f adr ac cmd d) = putWord8 0x17 >> put f >> putWord64be 0xFFFF >>
-            put adr >> put (bitOpt remoteAtCommandBitAC ac) >> put cmd >> putByteString d
-    get = getWord8 >>= getCmdOut where
-        getCmdOut 0x08 = ATCommand <$> get <*> get <*> getTillEnd
-        getCmdOut 0x09 = ATQueueCommand <$> get <*> get <*> getTillEnd
-        getCmdOut 0x10 = do
-                f <- get
-                a64 <- get
-                a16 <- get
-                getWord8 >> getWord8 -- Broadcast Radius and Options
-                d <- getTillEnd
-                return (if a64 /= broadcastAddress then Transmit64 f a64 d
-                        else Transmit16 f a16 d)
-        getCmdOut 0x17 = do
-                f     <- get
-                adr64 <- get
-                adr16 <- get
-                ac    <- liftM (`testBit` remoteAtCommandBitAC) getWord8
-                cmd   <- get
-                d     <- getTillEnd
-                return (if   adr64 /= broadcastAddress then RemoteATCommand64 f adr64 ac cmd d
-                        else RemoteATCommand16 f adr16 ac cmd d)
-        getCmdOut o    = fail $ "undefined PC->XBee command " ++ show o
-transmitBroadcastRadius = 0
-transmitOptions = 0
-remoteAtCommandBitAC = 1
+        put adr >> put (bitOpt remoteAtCommandBitAC ac) >> put cmd >> putByteString d
+    get = error "Can't deserialize CommandOut"
 
+transmitBroadcastRadius = 0x0
+transmitOptions = 0x0
+remoteAtCommandBitAC = 1 -- bits are numbered from 0
 
 bitOpt :: Int -> Bool -> Word8
 bitOpt i b = if b then bit i else 0

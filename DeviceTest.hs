@@ -22,7 +22,8 @@ import Control.Concurrent.ThreadGroup
 import Control.Applicative
 import Print
 
-import qualified Data.ByteString.Char8 as B
+import Data.Modbus
+import qualified Data.ByteString as BS
 
 connector  f s = handleConnector $ openSerialPort f s
 --connector  f s = handleConnector $ openSerialPort f s
@@ -30,18 +31,26 @@ connector  f s = handleConnector $ openSerialPort f s
 connector1 = connector "/dev/ttyUSB0" $ defaultSettings { Ser.baudRate = Ser.B115200 }
 connector2 = connector "/dev/ttyUSB1" $ defaultSettings
 
-addrs = [Address64 0x13a2004098b28c, Address64 0x13a2004092d041]
+-- 254, BD 4
+msg = BS.pack $ readHoldingRegisters 254 100 2
+
+--addrs = [Address64 0x13a2004098b28c, Address64 0x13a2004092d041]
+addrs = [Address64 0x13a2004092d041]
+a64 = XBeeAddress64 $ head addrs
+rt = RemoteAT (head addrs) True
 
 remoteTest = do
     peers <- getPeers
     let rs = concat . replicate 100 $ map ((\a -> RemoteAT a False) . nodeAddress64) peers
     mapM (\r -> address64 r >>= await) rs
 
+{-
 transmitTest = do
     let rs = map XBeeAddress64 addrs
     mapM (\a -> transmit a (B.pack "test") >>= await) rs
     --outputRaws
     --transmit (head rs) (B.pack "test") >>= await
+-}
 
 outputRaws = rawInSource $$ T.map show =$ outSink
 
