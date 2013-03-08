@@ -367,15 +367,13 @@ data CommandOut
 
 instance Serialize CommandIn where
     put = error "Can't serialize CommandIn"
-    get = getWord8 >>= (\c -> traceShow c $ getCmdIn c) where
+    get = getWord8 >>= getCmdIn where
         getCmdIn 0x8A = ModemStatusUpdate <$> get
         getCmdIn 0x88 = ATCommandResponse <$> get <*> get <*> get <*> getTillEnd
         getCmdIn 0x8B = TransmitStatus <$> get <*> get <*> get <*> get <*> get
         getCmdIn 0x97 = RemoteATCommandResponse <$> get <*> get <*> get <*> get <*> get <*> getTillEnd
-        --getCmdIn 0x90 = Receive <$> get <*> get <*> get <*> getTillEnd
         getCmdIn 0x90 = Receive <$> get <*> get <*> get <*> getTillEnd
-        --getCmdIn o    = trace ("unknown: " ++ show o) (TempCatchAll <$> getTillEnd)
-        --getCmdIn o    = trace ("undefined XBee -> PC Command: " ++ show o) $ fail $ "undefined XBee->PC command " ++ show o
+        getCmdIn o    = fail $ "undefined XBee->PC command " ++ show o
 
 instance Serialize CommandOut where
     put (ATCommand f cmd d) = putWord8 0x08 >> put f >> put cmd >> putByteString d
