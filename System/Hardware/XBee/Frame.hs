@@ -42,7 +42,7 @@ frames d | BS.null d = []
          | otherwise = let (h,t) = BS.splitAt maxFrameData d in Frame h:frames t
 
 checksum :: ByteString -> Word8
-checksum d = BS.foldl (-) 0xFF d
+checksum = BS.foldl (-) 0xFF
 
 startDelimiter :: Word8
 startDelimiter = 0x7E
@@ -77,4 +77,4 @@ breakAllByte :: Word8 -> ByteString -> [ByteString]
 breakAllByte at bs | BS.null bs = []
                    | otherwise  = let (a,b) = BS.breakByte at (BS.tail bs) in
                                   let a' = BS.cons (BS.head bs) a in
-                    if BS.null b then [a'] else  a':(breakAllByte at b)
+                    if BS.null b then [a'] else  a':breakAllByte at b

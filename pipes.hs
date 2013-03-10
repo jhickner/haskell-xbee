@@ -18,7 +18,7 @@ import System.Hardware.XBee.Command
 import System.Hardware.XBee.Frame
 
 import Data.Serialize
-import Data.Modbus
+--import Data.Modbus
 
 import Data.Word
 import qualified Data.ByteString as B
@@ -42,6 +42,8 @@ import Prelude hiding (catch)
 
 import Control.Proxy.TCP
 
+import Modbus
+
 {-
 incoming on socket:
   parse modbus message
@@ -61,45 +63,82 @@ incoming on xbee:
 
 -}
 
+addrs = [Address64 0x13a2004092d041]
 
 openPort = open' >> open' -- bug
   where open' = openSerialPort "/dev/tty.usbserial-A8003VSL" $ 
           defaultSettings { Ser.baudRate = Ser.B115200 }
  
-socketTest = do
+main = do
     p <- openPort
-    c <- newChan
-    forkIO $ runProxy $ decoderSession p
-    --forkIO $ runProxy $ chanReaderS c >-> toTXCommand >-> handleWriterD p
-    --forkIO $ runProxy $ chanReaderS c >-> printD
+    forkIO $ runProxy $ handleReaderS p >-> unwrapModResponses
     serveFork (Host "127.0.0.1") "8000" $ \(sock, remoteAddr) ->
-        runProxy $ socketReadS 4096 sock >-> toTXCommand >-> handleWriterD p
+        -- serial -> socket
+        -- not working because this isn't closed when the socket disconnects
+        -- so instead we'd need to register a listener for this address64
+        -- paired with this socket, and send responses to it
+        {-
+        forkIO $ runProxy $ handleReaderS p 
+            >-> printD
+            >-> unwrapModResponses
+            >-> socketWriteD sock
+        -}
+        -- socket -> serial
+        runProxy $ socketReadS 4096 sock 
+            >-> wrapModRequests (head addrs) 
+            >-> handleWriterD p
+
+
+encodeTX a64 bs = makeFrame $ Transmit64 noFrameId a64 bs
+makeFrame = encode . frame . encode
+
+xbeeCommandIns = decoder (get :: Get Frame) >-> 
+                 mapD frameData >->
+                 decoder (get :: Get CommandIn)
+
+unwrapModResponses =
+        xbeeCommandIns 
+    >-> rxPayloads
+    >-> decoder (get :: Get ModResponseFrame)
+    >-> printD
+    >-> mapD encode
+
+wrapModRequests a64 =
+        decoder (get :: Get ModRequestFrame)
+    >-> printD
+    >-> mapD encode
+    >-> mapD (encodeTX a64)
+
+
 
 decoderSession p = handleReaderS p 
-               >-> decoder getFrame 
+               >-> decoder (get :: Get Frame)
                >-> mapD frameData 
-               >-> decoder getCommandIn 
+               >-> decoder (get :: Get CommandIn)
                >-> printD
 
 
-main = do
-    openPort -- not sure why this is needed, but doesn't work without it
-    p <- openPort
-    forkIO $ runProxy $ getLineS >-> toATCommand >-> handleWriterD p
-    forkIO $ runProxy $ handleReaderS p >-> decoder getFrame >-> 
-                        mapD frameData >-> decoder getCommandIn >-> printD
-    forever $ threadDelay 1000000
 
-msg = B.pack $ readHoldingRegisters 254 100 2
+
+rxPayloads :: Proxy p => () -> Pipe p CommandIn B.ByteString IO ()
+rxPayloads () = runIdentityP $ forever $ do
+    c <- request ()
+    case c of
+      (Receive _ _ _ b) -> respond b
+      _                 -> return ()
+
+
+--msg = B.pack $ readHoldingRegisters 254 100 2
 
 --addrs = [Address64 0x13a2004098b28c, Address64 0x13a2004092d041]
-addrs = [Address64 0x13a2004092d041]
 
 
 toTXCommand :: Proxy p => () -> Pipe p a B.ByteString IO ()
 toTXCommand () = runIdentityP $ forever $ do
     _ <- request()
     respond $ encodeTX (head addrs) msg
+  where
+    msg = encode $ ModRequestFrame 254 (ReadHoldingRegisters 16 1)
 
 
 toATCommand :: Proxy p => () -> Pipe p String B.ByteString IO ()
@@ -115,10 +154,6 @@ cmds () = runIdentityP $ forever $ do
     lift $ threadDelay 1000000
 
 
-makeFrame = encode . frame . encode
-
-encodeTX :: Address64 -> B.ByteString -> B.ByteString
-encodeTX a64 bs = makeFrame $ Transmit64 noFrameId a64 bs
 
 encodeAT c1 c2 = makeFrame $ ATCommand frameId (commandName c1 c2) B.empty
 
@@ -149,12 +184,6 @@ chanWriterD c () = runIdentityP . forever $ request () >>= lift . writeChan c
 
 -------------------------------------------------------------------------------
 
-getFrame :: Get Frame
-getFrame = get
-
-getCommandIn :: Get CommandIn
-getCommandIn = get
-
 decoder :: (Proxy p, Serialize a) => Get a -> () -> Pipe p B.ByteString a IO r
 decoder g () = runIdentityP $ loop Nothing Nothing
   where
@@ -168,3 +197,4 @@ decoder g () = runIdentityP $ loop Nothing Nothing
           Done c bin' -> do
               respond c
               loop Nothing (Just bin')
+
